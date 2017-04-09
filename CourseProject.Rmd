@@ -1,0 +1,216 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Andre Jordaan"
+date: "4/6/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+**Data**
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+**What you should submit**
+
+The goal of your project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+Your submission should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+You should also apply your machine learning algorithm to the 20 test cases available in the test data above. Please submit your predictions in appropriate format to the programming assignment for automated grading. See the programming assignment for additional details.
+
+**Reproducibility**
+
+Due to security concerns with the exchange of R code, your code will not be run during the evaluation by your classmates. Please be sure that if they download the repo, they will be able to view the compiled HTML version of your analysis.
+
+## Prepare the data
+
+### Load required libraries and global settings
+
+```{r loadLibrary, echo=TRUE, warning=FALSE, message=FALSE}
+
+# Load the required libraries
+library(caret)                  # Classification and Regression Training 
+library(rpart)                  # Recursive Partitioning and Regression Trees
+library(rpart.plot)             # Plot 'rpart' Models: An Enhanced Version of 'plot.rpart'
+library(randomForest)           # Breiman and Cutler's Random Forests for Classification and Regression
+library(rattle)                 # Graphical User Interface for Data Mining in R
+library(doMC);                  # Provides a parallel backend for the %dopar% function using
+
+```
+
+### Download the data
+
+```{r downloadData, echo=TRUE, cache=TRUE}
+
+# Create data directory if not exist
+if(!file.exists("./data")){dir.create("./data")}
+
+# Download the training data file if it does not exist
+if(!file.exists("./data/pml-training.csv")) {
+        trainUrl  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+        download.file(trainUrl, destfile="./data/pml-training.csv", method="curl", quiet=FALSE)
+}
+
+# Download the test data file if it does not exist
+if(!file.exists("./data/pml-testing.csv")) {
+        testUrl  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+        download.file(testUrl, destfile="./data/pml-testing.csv", method="curl", quiet=FALSE)
+}
+
+```
+
+Once the download of the required files are complete, the data will be read into data frames using the read.csv function. Display the size and information of the two data frames.
+
+```{r readData, cache=TRUE}
+
+#Read the .csv files into corresponding data frames.
+trainDF <- read.csv("./data/pml-training.csv", na.strings=c("NA","NaN","#DIV/0!", ""))
+testDF <- read.csv("./data/pml-testing.csv", na.strings=c("NA","NaN","#DIV/0!", ""))
+
+# Dislay dimentions of the data frames
+dim(trainDF)
+dim(testDF)
+str(trainDF)
+str(testDF)
+
+```
+
+**Summary of the data**
+
+- Training data frame has 19622 rows (observations)
+
+- Training data frame has 160 columns (variables)
+
+- 152 out of 160 are sensor readings for 4 sensors
+
+- Sensor identifeid by: '_belt', '_arm', '_dumbbell' or '_forearm'
+
+- "classe" variable in the training set is the outcome to predict
+
+- Columns 1 - 7 will be remoded as the data are not sensor readings
+
+### Clean the data
+
+- Remove columns that contain NA missing values.
+
+- Remove columns that do not contribute much to the accelerometer measurements
+
+```{r cleanData, echo=TRUE, cahce=TRUE}
+
+# Remove columns not containing the accelerometer measurements. Keep prediction variable classe.
+# Remove columns 1 - 7
+reqcol = grep(pattern = "_belt|_arm|_dumbbell|_forearm", names(trainDF))
+trainDF <- trainDF[, c(reqcol,160)]
+trainDF <- trainDF[, -c(1:7)]
+notreqcol = which(colSums(is.na(trainDF)) > 19000)
+trainDF = trainDF[, -notreqcol]
+
+# Show table dimensions and show table calsses
+dim(trainDF)
+table(sapply(trainDF[1,], class))
+
+```
+
+Training now consists fof 19622 observations and 49 variables.
+
+Testing data  now consists fof 20 observations and 49 variables.
+
+### Slice the data
+
+We are now able to split the training set into clean 70% training and 30 validation sets.
+
+```{r, cache=TRUE}
+
+# Set the seed for reproduceability
+set.seed(760924)
+
+inTrain <- createDataPartition(trainDF$classe, p=0.70, list=F)
+training <- trainDF[inTrain, ]
+testing <- trainDF[-inTrain, ]
+
+# Check the dimentions for each set
+dim(training)
+dim(testing)
+```
+
+## Data Modeling Selection
+
+#### Model: Decision Tree
+
+We fit a predictive model for activity recognition using Random Forest algorithm because it automatically selects important variables and is robust to correlated covariates & outliers in general. 
+
+
+```{r}
+
+# Fit and train the model
+modFitregTree <- rpart(classe ~ ., data=training, minbucket = 2000)
+
+# Plot the tree
+fancyRpartPlot(modFitregTree)
+
+# Show predictors
+predmodFitregTree <- predict(modFitregTree, testing, type = "class")
+confusionMatrix(predmodFitregTree, testing$classe)
+
+```
+
+Accuracy : 0.4686 making this not the ideal model to use.
+
+#### Model: Random Forest
+
+```{r, cache=TRUE}
+
+#registerDoMC(cores = 4) #Leveraging Multi-Core for Parallelization
+
+# Fit and train the model
+modFitrandomForest <- randomForest(classe ~. , data=training, ntree = 500)
+
+# Plot the tree
+plot(modFitrandomForest)
+
+# Show predictors
+predmodFitrandomForest = predict(modFitrandomForest, newdata = testing)
+confusionMatrix(predmodFitrandomForest, testing$classe)
+
+#Dotchart of variable importance as measured by a Random Forest
+varImpPlot(modFitrandomForest)
+
+```
+
+Random Forests yielded better results, as expected and Cohen’s kappa indicator has low out of sampe errors! Accuracy : 0.99 making this model ideal.
+
+### Predicting for Test Data Set
+
+```{r, cache=TRUE}
+
+eval <-testDF[,intersect(names(trainDF),names(testDF))] 
+
+predictions<-predict(modFitrandomForest, eval)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("answers/problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictions)
+
+```
+
+
+
+
+
