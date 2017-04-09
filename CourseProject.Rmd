@@ -2,7 +2,7 @@
 title: "Prediction Assignment Writeup"
 author: "Andre Jordaan"
 date: "4/6/2017"
-output: html_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
